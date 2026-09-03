@@ -110,9 +110,9 @@ class Harness
 
         var chain = typeof(TreeListView).GetField("_chain", BindingFlags.NonPublic | BindingFlags.Instance)
                         .GetValue(tree) as HashSet<FsNode>;
-        Console.WriteLine($"chain tinted: root={chain.Contains(root)} docs={chain.Contains(docs)} notes={chain.Contains(notes)} (expected true,true,true)");
+        Console.WriteLine($"chain tinted: root={chain.Contains(root)} docs={chain.Contains(docs)} notes={chain.Contains(notes)} todo={chain.Contains(todo)} (expected all true)");
         if (!chain.Contains(root) || !chain.Contains(docs) || !chain.Contains(notes)
-            || chain.Contains(todo)
+            || !chain.Contains(todo)
             || chain.Contains(root.Children.First(c => c.Name == "Music")))
         { Console.WriteLine("CHAIN WRONG"); return 1; }
 

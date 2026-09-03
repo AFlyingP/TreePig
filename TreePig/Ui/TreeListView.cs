@@ -298,19 +298,16 @@ namespace TreePig.Ui
 
         public FsNode SelectedFsNode => _tree.SelectedNode?.Tag as FsNode;
 
-        // the gold chain runs from the root down to the folder you are in,
-        // picking a file keeps the gold on its folder
+        // the gold chain runs from the root down to whatever you selected,
+        // files and folders get the exact same treatment
         internal void UpdateChain()
         {
             var sel = SelectedFsNode ?? RootFs;
             var oldChain = _chain;
             var oldSel = _selected;
 
-            var folder = sel;
-            while (folder != null && !folder.IsDirectory) folder = folder.Parent;
-
             var newChain = new HashSet<FsNode>();
-            for (var p = folder; p != null; p = p.Parent) newChain.Add(p);
+            for (var p = sel; p != null; p = p.Parent) newChain.Add(p);
 
             _chain = newChain;
             _selected = sel;
@@ -496,8 +493,8 @@ namespace TreePig.Ui
             bool selected = (state & TreeNodeStates.Selected) != 0;
             bool inChain = _chain.Contains(fs);
 
-            // rows on the open path from the root down to the selected folder
-            // are gold, that is what makes the current folder obvious
+            // rows on the path from the root down to the selection are gold,
+            // files and folders alike
             Color back = inChain ? Color.FromArgb(255, 226, 132)
                 : selected ? (focused ? SystemColors.Highlight : SystemColors.ControlLight)
                 : Color.White;
