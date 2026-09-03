@@ -692,6 +692,9 @@ namespace TreePig.Ui
             {
                 _tree.RemoveNode(fs);
             }
+            // removing a row can drop the selection without an event, keep
+            // breadcrumb and the gold path honest
+            _tree.UpdateChain();
             TreeSelectionChanged(this, EventArgs.Empty);
             UpdateSummary();
         }
