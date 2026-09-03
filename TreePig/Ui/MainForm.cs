@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -685,12 +687,70 @@ namespace TreePig.Ui
 
         void ExportCsv()
         {
-            MessageBox.Show(this, "not implemented yet", "TreePig");
+            var root = _tree.RootFs;
+            if (root == null) return;
+            using var dlg = new SaveFileDialog
+            {
+                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                FileName = SuggestFileName(root) + ".csv"
+            };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            try
+            {
+                File.WriteAllText(dlg.FileName, BuildTable(root, ','), Encoding.UTF8);
+                _statusInfo.Text = "Exported to " + dlg.FileName;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         void CopyTreeToClipboard()
         {
-            MessageBox.Show(this, "not implemented yet", "TreePig");
+            var root = _tree.RootFs;
+            if (root == null) return;
+            Clipboard.SetText(BuildTable(root, '\t'));
+        }
+
+        string SuggestFileName(FsNode root)
+        {
+            if (root.IsVirtualRoot) return "scan";
+            var bad = Path.GetInvalidFileNameChars();
+            var name = new string(root.Name.Select(c => Array.IndexOf(bad, c) >= 0 ? '_' : c).ToArray());
+            return string.IsNullOrEmpty(name) ? "scan" : name;
+        }
+
+        string BuildTable(FsNode root, char sep)
+        {
+            var sb = new StringBuilder();
+            sb.Append(Join(sep, "Path", "Size (bytes)", "Allocated (bytes)", "Files", "Folders", "Percent of parent", "Last modified"));
+            sb.AppendLine();
+            foreach (var n in root.EnumerateAll())
+            {
+                string modified = n.LastWriteUtc == DateTime.MinValue
+                    ? ""
+                    : n.LastWriteUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+                sb.Append(Join(sep,
+                    Quote(n.FullName, sep),
+                    n.Size.ToString(),
+                    n.Allocated.ToString(),
+                    n.IsDirectory ? n.Files.ToString() : "",
+                    n.IsDirectory ? n.Folders.ToString() : "",
+                    n.PercentOfParent().ToString("0.##"),
+                    modified));
+                sb.AppendLine();
+            }
+            return sb.ToString();
+        }
+
+        string Join(char sep, params string[] parts) => string.Join(sep.ToString(), parts);
+
+        string Quote(string s, char sep)
+        {
+            if (s.IndexOf(sep) >= 0 || s.IndexOf('"') >= 0 || s.IndexOf('\n') >= 0)
+                return "\"" + s.Replace("\"", "\"\"") + "\"";
+            return s;
         }
 
         void ShowLargestFiles()
