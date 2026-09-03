@@ -53,7 +53,6 @@ namespace TreePig.Ui
         public bool ShowBars = true;
         public Color BarColor = Color.FromArgb(110, 192, 80, 77);
         public SizeUnit Unit = SizeUnit.Auto;
-        public Color ChainTint = Color.FromArgb(234, 244, 255);
 
         public event EventHandler<TreeColumnClickEventArgs> ColumnClicked;
         public event EventHandler HeaderRightClicked;
@@ -299,16 +298,19 @@ namespace TreePig.Ui
 
         public FsNode SelectedFsNode => _tree.SelectedNode?.Tag as FsNode;
 
-        // the chain of folders between the root and the selection gets a tint
-        // so the open path stays obvious while browsing the children
+        // the gold chain runs from the root down to the folder you are in,
+        // picking a file keeps the gold on its folder
         internal void UpdateChain()
         {
             var sel = SelectedFsNode ?? RootFs;
             var oldChain = _chain;
             var oldSel = _selected;
 
+            var folder = sel;
+            while (folder != null && !folder.IsDirectory) folder = folder.Parent;
+
             var newChain = new HashSet<FsNode>();
-            for (var p = sel?.Parent; p != null; p = p.Parent) newChain.Add(p);
+            for (var p = folder; p != null; p = p.Parent) newChain.Add(p);
 
             _chain = newChain;
             _selected = sel;
@@ -475,41 +477,55 @@ namespace TreePig.Ui
 
         // --- drawing entry points used by the child controls ---
 
+        // pens and brushes live as long as the app, drawing runs per row
+        static readonly Brush s_rowBrush = new SolidBrush(Color.White);
+        static readonly Brush s_goldBrush = new SolidBrush(Color.FromArgb(255, 226, 132));
+        static readonly Pen s_glyphBorder = new Pen(Color.FromArgb(120, 120, 120));
+        static readonly Pen s_glyphMark = new Pen(Color.FromArgb(70, 70, 70));
+        static readonly Pen s_guidePen = new Pen(Color.FromArgb(150, 190, 190, 200))
+        { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot };
+        static readonly Pen s_selectionBorder = new Pen(Color.FromArgb(68, 114, 196), 2);
+
         internal void DrawRow(Graphics g, TreeNode node, Rectangle bounds, TreeNodeStates state, bool focused)
         {
             var fs = (FsNode)node.Tag;
             int h = ItemHeight();
             int y = bounds.Y;
+            int rowW = Math.Max(bounds.Width, _tree.ClientSize.Width);
 
             bool selected = (state & TreeNodeStates.Selected) != 0;
-            Color back = selected
-                ? (focused ? SystemColors.Highlight : SystemColors.ControlLight)
-                : Color.White;
-            using (var b = new SolidBrush(back))
-                g.FillRectangle(b, bounds.X, y, Math.Max(bounds.Width, _tree.ClientSize.Width), h);
+            bool inChain = _chain.Contains(fs);
 
-            // the open path from the root down to the selection
-            if (!selected && _chain.Contains(fs))
-                using (var b = new SolidBrush(ChainTint))
-                    g.FillRectangle(b, bounds.X, y, Math.Max(bounds.Width, _tree.ClientSize.Width), h);
+            // rows on the open path from the root down to the selected folder
+            // are gold, that is what makes the current folder obvious
+            Color back = inChain ? Color.FromArgb(255, 226, 132)
+                : selected ? (focused ? SystemColors.Highlight : SystemColors.ControlLight)
+                : Color.White;
+            g.FillRectangle(s_rowBrush, bounds.X, y, rowW, h);
+            if (inChain)
+                g.FillRectangle(s_goldBrush, bounds.X, y, rowW, h);
 
             int scrollX = _tree.GetScrollX();
             int gx = bounds.X + 2;
+
+            // dotted guides, one per ancestor level, they show what belongs
+            // to which folder
+            for (int l = 0; l < node.Level; l++)
+            {
+                int lineX = 2 - scrollX + l * _tree.Indent + 8;
+                if (lineX < gx) g.DrawLine(s_guidePen, lineX, y + 2, lineX, y + h - 2);
+            }
 
             // expand glyph
             if (fs.HasChildren)
             {
                 var r = new Rectangle(gx, y + (h - 12) / 2, 12, 12);
                 g.FillRectangle(SystemBrushes.Window, r);
-                using (var p = new Pen(Color.FromArgb(120, 120, 120)))
-                    g.DrawRectangle(p, r);
-                using (var p = new Pen(Color.FromArgb(70, 70, 70)))
-                {
-                    int my = y + h / 2;
-                    g.DrawLine(p, r.Left + 3, my, r.Right - 3, my);
-                    if (!node.IsExpanded)
-                        g.DrawLine(p, gx + 6, r.Top + 3, gx + 6, r.Bottom - 3);
-                }
+                g.DrawRectangle(s_glyphBorder, r);
+                int my = y + h / 2;
+                g.DrawLine(s_glyphMark, r.Left + 3, my, r.Right - 3, my);
+                if (!node.IsExpanded)
+                    g.DrawLine(s_glyphMark, gx + 6, r.Top + 3, gx + 6, r.Bottom - 3);
             }
 
             int ix = gx + 15;
@@ -526,9 +542,9 @@ namespace TreePig.Ui
             {
                 var clip = g.Clip;
                 g.SetClip(labelRect);
-                Color textColor = selected
-                    ? (focused ? SystemColors.HighlightText : SystemColors.ControlText)
-                    : (fs.HasError ? Color.Firebrick : SystemColors.ControlText);
+                Color textColor = inChain || !selected || !focused
+                    ? (fs.HasError ? Color.Firebrick : SystemColors.ControlText)
+                    : SystemColors.HighlightText;
                 string label = fs.Name + (fs.HasError ? "  <access denied>" : "");
                 TextRenderer.DrawText(g, label, Font, labelRect, textColor,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
@@ -558,12 +574,27 @@ namespace TreePig.Ui
                     }
                 }
 
-                Color c = selected && focused ? SystemColors.HighlightText : SystemColors.ControlText;
+                if (ShowBars && ci == TreeColumn.Percent)
+                {
+                    double pct = fs.PercentOfParent();
+                    int barW = (int)((w - 6) * Math.Min(1.0, pct / 100.0));
+                    if (barW > 0)
+                    {
+                        using (var b = new SolidBrush(Color.FromArgb(150, 197, 189, 243)))
+                            g.FillRectangle(b, cx + 2, y + 2, barW, h - 4);
+                    }
+                }
+
+                Color c = !inChain && selected && focused ? SystemColors.HighlightText : SystemColors.ControlText;
                 var flags = (Columns[ci].Align == HorizontalAlignment.Right ? TextFormatFlags.Right : TextFormatFlags.Left)
                     | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
                 var textRect = new Rectangle(cx + 4, y, w - 8, h);
                 TextRenderer.DrawText(g, CellText(fs, ci), Font, textRect, c, flags);
             }
+
+            // blue frame around the selected row of the open path
+            if (selected && inChain)
+                g.DrawRectangle(s_selectionBorder, 0, y + 1, rowW - 2, h - 2);
         }
 
         void DrawIcon(Graphics g, FsNode fs, bool expanded, int x, int y)
