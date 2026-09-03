@@ -1,11 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
-using System.Threading.Tasks;
-
-namespace TreePig.Core
+using System.Threading.Tasks;namespace TreePig.Core
 {
     class ScanOptions
     {
@@ -23,23 +22,34 @@ namespace TreePig.Core
         public TimeSpan Elapsed;
     }
 
-    // Walks a directory tree and builds the FsNode graph. The scan fans out
-    // across threads (one task per directory, capped by a semaphore) and every
-    // parent rolls its finished children into its own totals.
+    // Walks a directory tree and builds the FsNode graph. A fixed pool of
+    // workers pulls directories off a shared queue; every directory keeps an
+    // atomic count of unfinished children and merges itself into its parent
+    // once the count hits zero, so totals stay correct without any locking on
+    // the nodes themselves.
     class Scanner
     {
+        class DirWork
+        {
+            public FsNode Node;
+            public DirWork Parent;
+            public int Pending = 1;   // itself + children not yet merged
+        }
+
         private readonly string _path;
         private readonly ScanOptions _opt;
         private IProgress<ScanProgress> _progress;
         private CancellationToken _ct;
-        private SemaphoreSlim _gate;
         private Stopwatch _watch;
         private uint _cluster;
+        private ConcurrentQueue<DirWork> _queue;
 
-        private long _files, _dirs, _bytes, _errors;
+        private long _files, _dirs, _bytes, _errors, _active;
         private long _lastReportMs;
 
         public FsNode Root { get; private set; }
+
+        public long ErrorCount => Interlocked.Read(ref _errors);
 
         public Scanner(string path, ScanOptions opt = null)
         {
@@ -51,152 +61,177 @@ namespace TreePig.Core
         {
             _progress = progress;
             _ct = ct;
-            _gate = new SemaphoreSlim(_opt.Threads > 0 ? _opt.Threads : Environment.ProcessorCount * 8);
-            _cluster = Util.GetClusterSize(_path);
             _watch = Stopwatch.StartNew();
+            _cluster = Util.GetClusterSize(_path);
 
-            var di = new DirectoryInfo(_path);
-            Root = MakeRootNode(di);
-            Interlocked.Increment(ref _dirs);
+            int workers = Math.Max(1, _opt.Threads > 0 ? _opt.Threads : Environment.ProcessorCount * 4);
+            _queue = new ConcurrentQueue<DirWork>();
 
-            Report(_path, true);
+            Root = MakeRootNode(_path);
+            Interlocked.Increment(ref _active);
+            _queue.Enqueue(new DirWork { Node = Root });
+
+            // the pool grows lazily, a scan would crawl for the first seconds
+            // while it waits for threads to show up
+            ThreadPool.GetMinThreads(out int oldWorkerMin, out int oldIoMin);
+            ThreadPool.SetMinThreads(Math.Max(oldWorkerMin, workers), oldIoMin);
             try
             {
-                await ScanDirAsync(Root, di);
+                var tasks = new Task[workers];
+                for (int i = 0; i < workers; i++)
+                    tasks[i] = Task.Run(() => WorkerLoop(), CancellationToken.None);
+
+                Report(_path, true);
+                try
+                {
+                    await Task.WhenAll(tasks);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
             }
-            catch (OperationCanceledException)
+            finally
             {
-                throw;
+                ThreadPool.SetMinThreads(oldWorkerMin, oldIoMin);
             }
             Report(_path, true);
             return Root;
         }
 
-        private FsNode MakeRootNode(DirectoryInfo di)
+        FsNode MakeRootNode(string path)
         {
             string name;
-            if (di.FullName.EndsWith(Path.DirectorySeparatorChar) || di.FullName.Length <= 3)
+            if (path.EndsWith("\\") || path.Length <= 3)
             {
                 // drive root, make it read like Explorer does
                 try
                 {
-                    var drive = new DriveInfo(di.FullName);
+                    var drive = new DriveInfo(path);
                     name = string.IsNullOrEmpty(drive.VolumeLabel) ? "Local Disk" : drive.VolumeLabel;
                     name += " (" + drive.Name.TrimEnd('\\') + ")";
                 }
-                catch { name = di.FullName; }
+                catch { name = path; }
             }
             else
             {
-                name = di.Name;
-                if (string.IsNullOrEmpty(name)) name = di.FullName;
+                name = Path.GetFileName(path.TrimEnd('\\'));
+                if (string.IsNullOrEmpty(name)) name = path;
             }
+
+            DateTime lastWrite = DateTime.MinValue;
+            try { lastWrite = Directory.GetLastWriteTimeUtc(path); } catch { }
 
             return new FsNode
             {
                 Name = name,
-                FullName = di.FullName,
+                FullName = path,
                 IsDirectory = true,
-                LastWriteUtc = SafeLastWrite(di)
+                LastWriteUtc = lastWrite
             };
         }
 
-        private async Task<FsNode> ScanDirAsync(FsNode node, DirectoryInfo di)
+        void WorkerLoop()
         {
-            List<Task<FsNode>> subs = null;
-            await _gate.WaitAsync(_ct);
-            try
+            while (true)
             {
-                if (_opt.CollectOwner) node.Owner = Util.GetOwner(di.FullName);
-                subs = EnumerateInto(node, di);
-                Interlocked.Increment(ref _dirs);
-                MaybeReport(di.FullName);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (UnauthorizedAccessException)
-            {
-                node.HasError = true;
-                Interlocked.Increment(ref _errors);
-            }
-            catch (IOException)
-            {
-                node.HasError = true;
-                Interlocked.Increment(ref _errors);
-            }
-            finally { _gate.Release(); }
-
-            if (subs != null)
-            {
-                // wait for the subdirs one by one and fold their numbers in
-                foreach (var t in subs)
+                if (_queue.TryDequeue(out DirWork w))
                 {
-                    var child = await t;
-                    node.RollUp(child);
+                    Process(w);
+                    continue;
                 }
+                // nothing in the queue, but a directory somewhere might still
+                // be mid-enumeration about to queue its children
+                if (Volatile.Read(ref _active) == 0) return;
+                _ct.ThrowIfCancellationRequested();
+                Thread.Yield();
             }
-            return node;
         }
 
-        private List<Task<FsNode>> EnumerateInto(FsNode node, DirectoryInfo di)
+        void Process(DirWork w)
         {
-            List<Task<FsNode>> subs = null;
-            foreach (var entry in di.EnumerateFileSystemInfos())
+            FsNode node = w.Node;
+            long filesHere = 0, bytesHere = 0;
+
+            if (_opt.CollectOwner) node.Owner = Util.GetOwner(node.FullName);
+
+            var entries = FindFile.ListDirectory(node.FullName, out int err);
+            if (err != 0)
+            {
+                // vanished or refused, count it and move on
+                node.HasError = true;
+                Interlocked.Increment(ref _errors);
+            }
+
+            string prefix = node.FullName.EndsWith("\\") ? node.FullName : node.FullName + "\\";
+            foreach (var e in entries)
             {
                 _ct.ThrowIfCancellationRequested();
-                // entries can vanish or deny access between listing and stat,
-                // they just get skipped
-                try
-                {
-                    FileAttributes attr = entry.Attributes;
-                    bool isDir = entry is DirectoryInfo;
 
-                    if (isDir)
+                bool isDir = (e.Attributes & FileAttributes.Directory) != 0;
+                if (isDir)
+                {
+                    bool reparse = (e.Attributes & FileAttributes.ReparsePoint) != 0;
+                    var child = new FsNode
                     {
-                        bool reparse = (attr & FileAttributes.ReparsePoint) != 0;
-                        var child = new FsNode
-                        {
-                            Name = entry.Name,
-                            FullName = entry.FullName,
-                            IsDirectory = true,
-                            IsReparsePoint = reparse,
-                            Attributes = attr,
-                            LastWriteUtc = entry.LastWriteTimeUtc
-                        };
-                        node.AddDirChild(child);
-                        // junctions and symlinks are listed but not followed
-                        if (!reparse)
-                            (subs ??= new List<Task<FsNode>>()).Add(ScanDirAsync(child, (DirectoryInfo)entry));
-                    }
-                    else
+                        Name = e.Name,
+                        FullName = prefix + e.Name,
+                        IsDirectory = true,
+                        IsReparsePoint = reparse,
+                        Attributes = e.Attributes,
+                        LastWriteUtc = e.LastWriteUtc
+                    };
+                    node.AddDirChild(child);
+                    // junctions and symlinks are listed but not followed
+                    if (!reparse)
                     {
-                        long len = ((FileInfo)entry).Length;
-                        var child = new FsNode
-                        {
-                            Name = entry.Name,
-                            FullName = entry.FullName,
-                            IsDirectory = false,
-                            Attributes = attr,
-                            Size = len,
-                            Allocated = Util.RoundUpToCluster(len, _cluster),
-                            LastWriteUtc = entry.LastWriteTimeUtc
-                        };
-                        if (_opt.CollectOwner) child.Owner = Util.GetOwner(entry.FullName);
-                        node.AddFileChild(child);
-                        Interlocked.Add(ref _bytes, len);
-                        Interlocked.Increment(ref _files);
-                        MaybeReport(entry.FullName);
+                        Interlocked.Increment(ref w.Pending);
+                        Interlocked.Increment(ref _active);
+                        _queue.Enqueue(new DirWork { Node = child, Parent = w });
                     }
                 }
-                catch (OperationCanceledException) { throw; }
-                catch { continue; }
+                else
+                {
+                    long len = e.Length;
+                    var child = new FsNode
+                    {
+                        Name = e.Name,
+                        FullName = prefix + e.Name,
+                        IsDirectory = false,
+                        Attributes = e.Attributes,
+                        Size = len,
+                        Allocated = Util.RoundUpToCluster(len, _cluster),
+                        LastWriteUtc = e.LastWriteUtc
+                    };
+                    if (_opt.CollectOwner) child.Owner = Util.GetOwner(child.FullName);
+                    node.AddFileChild(child);
+                    filesHere++;
+                    bytesHere += len;
+                    MaybeReport(child.FullName);
+                }
             }
-            return subs;
+
+            Interlocked.Add(ref _files, filesHere);
+            Interlocked.Add(ref _bytes, bytesHere);
+            Interlocked.Increment(ref _dirs);
+            MaybeReport(node.FullName);
+            Finish(w);
         }
 
-        private DateTime SafeLastWrite(DirectoryInfo di)
+        // merges a finished directory (and, cascading upward, every ancestor
+        // whose children are all done) into its parent
+        void Finish(DirWork w)
         {
-            try { return di.LastWriteTimeUtc; }
-            catch { return DateTime.MinValue; }
+            while (true)
+            {
+                if (Interlocked.Decrement(ref w.Pending) != 0) return;
+                DirWork parent = w.Parent;
+                if (parent != null)
+                    parent.Node.RollUp(w.Node);
+                Interlocked.Decrement(ref _active);
+                if (parent == null) return;
+                w = parent;
+            }
         }
 
         private void MaybeReport(string path)

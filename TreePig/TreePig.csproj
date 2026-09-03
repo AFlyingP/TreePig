@@ -6,6 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>TreePig</AssemblyName>
     <RootNamespace>TreePig</RootNamespace>
     <ApplicationIcon>TreePig.ico</ApplicationIcon>
@@ -14,5 +15,8 @@
     <Description>Disk space analyzer for Windows</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TreePig.Tests" />
+  </ItemGroup>
 
 </Project>
