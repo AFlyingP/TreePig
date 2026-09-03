@@ -42,6 +42,7 @@ namespace TreePig.Ui
             StartPosition = FormStartPosition.CenterScreen;
             Size = new Size(1000, 660);
             AllowDrop = true;
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             _tree = new TreeListView
             {
