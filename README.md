@@ -13,6 +13,9 @@ Usable for everyday disk cleanup work. Things that are in:
 - fast parallel scan with live progress (path, size, files/s) and cancel
 - tree list with size, allocated size, file/folder counts, percent of parent
   and last change columns, plus the red bars behind the size numbers
+- breadcrumb bar under the toolbar showing the folder you are in, click any
+  piece of the path to jump back up; the chain between the root and the
+  selected folder stays tinted in the tree so the open path is obvious
 - sort by any column (natural order for names, so file10 comes after file9)
 - multi-folder scans under one virtual root
 - delete folders/files to the recycle bin, rescan a single branch after

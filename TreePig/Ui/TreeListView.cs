@@ -53,6 +53,7 @@ namespace TreePig.Ui
         public bool ShowBars = true;
         public Color BarColor = Color.FromArgb(110, 192, 80, 77);
         public SizeUnit Unit = SizeUnit.Auto;
+        public Color ChainTint = Color.FromArgb(234, 244, 255);
 
         public event EventHandler<TreeColumnClickEventArgs> ColumnClicked;
         public event EventHandler HeaderRightClicked;
@@ -61,10 +62,13 @@ namespace TreePig.Ui
         public event EventHandler DeleteRequested;    // del key
 
         readonly HeaderStrip _header;
+        readonly BreadcrumbBar _breadcrumb;
         readonly ColumnTree _tree;
         readonly System.Windows.Forms.Timer _layoutTimer;
         readonly Dictionary<FsNode, TreeNode> _map = new Dictionary<FsNode, TreeNode>();
         readonly HashSet<FsNode> _populated = new HashSet<FsNode>();
+        HashSet<FsNode> _chain = new HashSet<FsNode>();
+        FsNode _selected;
         List<KeyValuePair<int, int>> _colPos = new List<KeyValuePair<int, int>>();
         int _colTotal;
         int _spaceW;
@@ -73,10 +77,13 @@ namespace TreePig.Ui
 
         public TreeListView()
         {
+            _breadcrumb = new BreadcrumbBar { Dock = DockStyle.Top };
             _header = new HeaderStrip(this) { Dock = DockStyle.Top };
             _tree = new ColumnTree(this) { Dock = DockStyle.Fill };
             Controls.Add(_tree);
             Controls.Add(_header);
+            Controls.Add(_breadcrumb);
+            _breadcrumb.SegmentClicked += n => SelectNode(n);
 
             _layoutTimer = new System.Windows.Forms.Timer { Interval = 250 };
             _layoutTimer.Tick += LayoutTimerTick;
@@ -170,6 +177,7 @@ namespace TreePig.Ui
             RootFs = root;
             Reload();
             if (_tree.Nodes.Count > 0) _tree.Nodes[0].Expand();
+            UpdateChain();
         }
 
         public void Reload()
@@ -191,6 +199,7 @@ namespace TreePig.Ui
             _tree.EndUpdate();
 
             if (sel != null) RestoreSelection(sel);
+            UpdateChain();
         }
 
         TreeNode MakeNode(FsNode fs)
@@ -290,12 +299,54 @@ namespace TreePig.Ui
 
         public FsNode SelectedFsNode => _tree.SelectedNode?.Tag as FsNode;
 
+        // the chain of folders between the root and the selection gets a tint
+        // so the open path stays obvious while browsing the children
+        internal void UpdateChain()
+        {
+            var sel = SelectedFsNode ?? RootFs;
+            var oldChain = _chain;
+            var oldSel = _selected;
+
+            var newChain = new HashSet<FsNode>();
+            for (var p = sel?.Parent; p != null; p = p.Parent) newChain.Add(p);
+
+            _chain = newChain;
+            _selected = sel;
+
+            if (oldSel != null) InvalidateRow(oldSel);
+            if (sel != null) InvalidateRow(sel);
+            foreach (var n in oldChain) InvalidateRow(n);
+            foreach (var n in newChain) InvalidateRow(n);
+
+            _breadcrumb.SetPath(sel);
+        }
+
+        internal BreadcrumbBar Breadcrumb => _breadcrumb;
+
         public void SelectNode(FsNode fs)
         {
-            if (fs != null && _map.TryGetValue(fs, out TreeNode tn))
+            if (fs == null || RootFs == null) return;
+            // rows only exist along expanded branches, so open the chain on
+            // the way down (breadcrumb jumps land here with collapsed parts)
+            var chain = new List<FsNode> { RootFs };
+            for (var n = fs.Parent; n != null; n = n.Parent) chain.Add(n);
+            chain.Reverse();
+            foreach (var n in chain)
             {
-                _tree.SelectedNode = tn;
-                tn.EnsureVisible();
+                if (!_map.TryGetValue(n, out TreeNode tn)) return;
+                if (tn.Nodes.Count == 1 && tn.Nodes[0].Tag == null)
+                    PopulateNode(tn, n);
+                if (n != fs) tn.Expand();
+            }
+            if (_map.TryGetValue(fs, out TreeNode target))
+            {
+                _tree.SelectedNode = target;
+                target.EnsureVisible();
+                // a programmatic selection does not raise AfterSelect on
+                // every runtime, so keep breadcrumb and listeners current
+                // from here as well
+                UpdateChain();
+                SelectionChanged?.Invoke(this, EventArgs.Empty);
             }
         }
 
@@ -436,6 +487,11 @@ namespace TreePig.Ui
                 : Color.White;
             using (var b = new SolidBrush(back))
                 g.FillRectangle(b, bounds.X, y, Math.Max(bounds.Width, _tree.ClientSize.Width), h);
+
+            // the open path from the root down to the selection
+            if (!selected && _chain.Contains(fs))
+                using (var b = new SolidBrush(ChainTint))
+                    g.FillRectangle(b, bounds.X, y, Math.Max(bounds.Width, _tree.ClientSize.Width), h);
 
             int scrollX = _tree.GetScrollX();
             int gx = bounds.X + 2;
@@ -621,6 +677,7 @@ namespace TreePig.Ui
             protected override void OnAfterSelect(TreeViewEventArgs e)
             {
                 base.OnAfterSelect(e);
+                _owner.UpdateChain();
                 _owner.SelectionChanged?.Invoke(this, EventArgs.Empty);
             }
 
