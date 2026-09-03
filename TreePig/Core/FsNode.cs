@@ -66,7 +66,24 @@ namespace TreePig.Core
             var p = Parent;
             if (p == null) return;
             p.Children?.Remove(this);
-            p.Adjust(-Size, -Allocated, IsDirectory ? -Files : -Files, IsDirectory ? -(Folders + 1) : 0);
+            long folders = IsDirectory ? Folders + 1 : 0;
+            p.Adjust(-Size, -Allocated, -Files, -folders);
+        }
+
+        // swaps a rescan result in for an existing child and corrects the
+        // totals on every ancestor
+        public void ReplaceChild(FsNode oldChild, FsNode newChild)
+        {
+            if (Children == null) return;
+            int idx = Children.IndexOf(oldChild);
+            if (idx < 0) return;
+            Children[idx] = newChild;
+            oldChild.Parent = null;
+            newChild.Parent = this;
+            Adjust(newChild.Size - oldChild.Size,
+                   newChild.Allocated - oldChild.Allocated,
+                   newChild.Files - oldChild.Files,
+                   newChild.Folders - oldChild.Folders);
         }
 
         private void Adjust(long size, long allocated, long files, long folders)

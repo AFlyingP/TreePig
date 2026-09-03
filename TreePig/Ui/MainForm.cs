@@ -41,6 +41,9 @@ namespace TreePig.Ui
             _tree = new TreeListView { Dock = DockStyle.Fill };
             _tree.ColumnClicked += TreeColumnClicked;
             _tree.SelectionChanged += TreeSelectionChanged;
+            _tree.NodeActivated += (s, e) => OpenSelection();
+            _tree.DeleteRequested += (s, e) => DeleteSelection();
+            _tree.ContextMenuStrip = BuildContextMenu();
 
             _emptyHint = new Label
             {
@@ -503,6 +506,143 @@ namespace TreePig.Ui
                 Util.FormatBytes(fs.Size),
                 fs.PercentOfParent(),
                 fs.Parent == null ? "total" : "parent");
+        }
+
+        // --- context menu ---
+
+        ContextMenuStrip BuildContextMenu()
+        {
+            var menu = new ContextMenuStrip();
+
+            var miOpen = new ToolStripMenuItem("Open", null, (s, e) => OpenSelection());
+            var miShow = new ToolStripMenuItem("Show in Explorer", null, (s, e) =>
+            {
+                var fs = _tree.SelectedFsNode;
+                if (fs != null) Util.ShowInExplorer(fs.FullName);
+            });
+            var miCmd = new ToolStripMenuItem("Open Command Prompt Here", null, (s, e) =>
+            {
+                var fs = _tree.SelectedFsNode;
+                if (fs != null && fs.IsDirectory) Util.OpenCmdHere(fs.FullName);
+            });
+
+            var miCopyPath = new ToolStripMenuItem("Copy Full Path", null, (s, e) =>
+            {
+                var fs = _tree.SelectedFsNode;
+                if (fs != null) Clipboard.SetText(fs.FullName);
+            });
+            var miCopyName = new ToolStripMenuItem("Copy Name", null, (s, e) =>
+            {
+                var fs = _tree.SelectedFsNode;
+                if (fs != null) Clipboard.SetText(fs.Name);
+            });
+
+            var miRescanBranch = new ToolStripMenuItem("Rescan This Branch", null, (s, e) => RescanBranch(_tree.SelectedFsNode));
+            var miDelete = new ToolStripMenuItem("Delete", null, (s, e) => DeleteSelection());
+            var miExpand = new ToolStripMenuItem("Expand All Children", null, (s, e) => _tree.ExpandBelow(_tree.SelectedFsNode));
+            var miCollapse = new ToolStripMenuItem("Collapse All Children", null, (s, e) => _tree.CollapseBelow(_tree.SelectedFsNode));
+
+            menu.Items.AddRange(new ToolStripItem[]
+            {
+                miOpen, miShow, miCmd, new ToolStripSeparator(),
+                miCopyPath, miCopyName, new ToolStripSeparator(),
+                miRescanBranch, miDelete, new ToolStripSeparator(),
+                miExpand, miCollapse
+            });
+
+            menu.Opening += (s, e) =>
+            {
+                var fs = _tree.SelectedFsNode;
+                bool has = fs != null;
+                miCmd.Enabled = has && fs.IsDirectory && !fs.IsVirtualRoot;
+                miRescanBranch.Enabled = has && fs.IsDirectory && !fs.IsVirtualRoot && !_scanning;
+                miDelete.Enabled = has && !fs.IsVirtualRoot;
+                miExpand.Enabled = has && fs.IsDirectory;
+                miCollapse.Enabled = has && fs.IsDirectory;
+            };
+            return menu;
+        }
+
+        void OpenSelection()
+        {
+            var fs = _tree.SelectedFsNode;
+            if (fs == null || fs.IsVirtualRoot) return;
+            try { Util.ShellOpen(fs.FullName); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        void DeleteSelection()
+        {
+            var fs = _tree.SelectedFsNode;
+            if (fs == null || fs.IsVirtualRoot || _scanning) return;
+
+            string what = fs.IsDirectory
+                ? string.Format("folder \"{0}\" and everything inside it", fs.Name)
+                : string.Format("file \"{0}\"", fs.Name);
+            var answer = MessageBox.Show(this, "Send " + what + " to the recycle bin?",
+                "TreePig", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return;
+
+            bool ok;
+            try { ok = Util.DeleteToRecycleBin(fs.FullName); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (!ok)
+            {
+                MessageBox.Show(this, "Windows would not delete it.", "TreePig",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            fs.RemoveFromTree();
+            _tree.RemoveNode(fs);
+            UpdateSummary();
+        }
+
+        async void RescanBranch(FsNode node)
+        {
+            if (node == null || _scanning || !node.IsDirectory || node.IsVirtualRoot) return;
+            _scanning = true;
+            SetBusyState(true);
+            ShowScanDialog();
+
+            _cts = new CancellationTokenSource();
+            var scanner = new Scanner(node.FullName, new ScanOptions());
+            var progress = new Progress<ScanProgress>(OnScanProgress);
+            try
+            {
+                var fresh = await scanner.ScanAsync(progress, _cts.Token);
+                var parent = node.Parent;
+                if (parent == null)
+                {
+                    _tree.SetRoot(fresh);
+                }
+                else
+                {
+                    parent.ReplaceChild(node, fresh);
+                    _tree.Reload();
+                }
+                Text = _tree.RootFs.IsVirtualRoot ? "TreePig" : "TreePig - " + _tree.RootFs.FullName;
+                UpdateSummary();
+                SetErrorCount(CountErrors(_tree.RootFs));
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _scanning = false;
+                SetBusyState(false);
+                CloseScanDialog();
+            }
         }
 
         // --- drag & drop ---

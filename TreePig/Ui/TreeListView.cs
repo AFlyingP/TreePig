@@ -57,6 +57,8 @@ namespace TreePig.Ui
         public event EventHandler<TreeColumnClickEventArgs> ColumnClicked;
         public event EventHandler HeaderRightClicked;
         public event EventHandler SelectionChanged;
+        public event EventHandler NodeActivated;      // enter or double click
+        public event EventHandler DeleteRequested;    // del key
 
         readonly HeaderStrip _header;
         readonly ColumnTree _tree;
@@ -563,6 +565,42 @@ namespace TreePig.Ui
             {
                 base.OnAfterSelect(e);
                 _owner.SelectionChanged?.Invoke(this, EventArgs.Empty);
+            }
+
+            protected override void OnNodeMouseClick(TreeNodeMouseClickEventArgs e)
+            {
+                base.OnNodeMouseClick(e);
+                // right click should make the row under the mouse the
+                // selected one before any menu shows up
+                if (e.Button == MouseButtons.Right)
+                    SelectedNode = e.Node;
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Enter && SelectedNode != null)
+                {
+                    _owner.NodeActivated?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+                if (e.KeyCode == Keys.Delete && SelectedNode != null)
+                {
+                    _owner.DeleteRequested?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+                base.OnKeyDown(e);
+            }
+
+            protected override void OnNodeMouseDoubleClick(TreeNodeMouseClickEventArgs e)
+            {
+                base.OnNodeMouseDoubleClick(e);
+                // folders toggle on double click all by themselves, files open
+                if (e.Node?.Tag is FsNode fs && !fs.IsDirectory)
+                    Util.ShellOpen(fs.FullName);
             }
 
             internal int GetScrollX()
