@@ -11,6 +11,7 @@ namespace TreePig.Core
         public string Name = "";
         public string FullName = "";
         public bool IsDirectory;
+        public bool IsVirtualRoot;     // synthetic parent when several folders are scanned at once
         public bool IsReparsePoint;
         public bool HasError;          // something below could not be read
         public long Size;              // bytes of all files below

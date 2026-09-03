@@ -160,7 +160,9 @@ namespace TreePig.Ui
         public void SetRoot(FsNode root)
         {
             RootFs = root;
+            SortModel();
             Reload();
+            if (_tree.Nodes.Count > 0) _tree.Nodes[0].Expand();
         }
 
         public void Reload()
