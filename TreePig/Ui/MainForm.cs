@@ -107,8 +107,14 @@ namespace TreePig.Ui
             var r = _settings.WindowRect;
             if (r != null && r.Length == 4 && r[2] >= 400 && r[3] >= 300)
             {
-                StartPosition = FormStartPosition.Manual;
-                Bounds = new Rectangle(r[0], r[1], r[2], r[3]);
+                var saved = new Rectangle(r[0], r[1], r[2], r[3]);
+                // a monitor might be gone since the last run, a window parked
+                // on it would open invisible
+                if (SystemInformation.VirtualScreen.IntersectsWith(saved))
+                {
+                    StartPosition = FormStartPosition.Manual;
+                    Bounds = saved;
+                }
             }
             if (_settings.WindowMaximized) WindowState = FormWindowState.Maximized;
         }
@@ -672,7 +678,21 @@ namespace TreePig.Ui
             fs.RemoveFromTree();
             _totalErrors -= CountErrorsBelow(fs);
             SetErrorCount(_totalErrors);
-            _tree.RemoveNode(fs);
+            if (fs == _tree.RootFs && !fs.IsVirtualRoot)
+            {
+                // the scanned folder itself is gone, back to the empty state
+                _tree.SetRoot(null);
+                Text = "TreePig";
+                _emptyHint.Visible = true;
+                PositionHint();
+                _totalErrors = 0;
+                SetErrorCount(0);
+            }
+            else
+            {
+                _tree.RemoveNode(fs);
+            }
+            TreeSelectionChanged(this, EventArgs.Empty);
             UpdateSummary();
         }
 
