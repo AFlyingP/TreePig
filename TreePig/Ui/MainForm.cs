@@ -236,8 +236,15 @@ namespace TreePig.Ui
         // one entry per ready drive, like the classic tree size tools
         void RefreshDriveItems(ToolStripItemCollection items)
         {
-            for (int i = items.Count - 1; i >= 0; i--)
-                if (items[i].Tag is string) items.RemoveAt(i);
+            // strip entries from an earlier refresh first
+            while (items.Count > 0)
+            {
+                var last = items[items.Count - 1];
+                if (last is ToolStripSeparator || last.Tag is string)
+                    items.RemoveAt(items.Count - 1);
+                else
+                    break;
+            }
 
             var drives = new List<ToolStripItem>();
             try
@@ -341,25 +348,31 @@ namespace TreePig.Ui
                 try
                 {
                     var root = await scanner.ScanAsync(progress, token);
-                    BeginInvoke(new Action(() => AttachResult(root, add, false)));
+                    Ui(() => AttachResult(root, add, false));
                 }
                 catch (OperationCanceledException)
                 {
-                    BeginInvoke(new Action(() => AttachResult(scanner.Root, add, true)));
+                    Ui(() => AttachResult(scanner.Root, add, true));
                 }
                 catch (Exception ex)
                 {
                     var msg = ex.Message;
-                    BeginInvoke(new Action(() =>
+                    Ui(() =>
                     {
                         _scanning = false;
                         SetBusyState(false);
                         CloseScanDialog();
-                        if (IsHandleCreated && !IsDisposed)
-                            MessageBox.Show(this, msg, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }));
+                        MessageBox.Show(this, msg, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    });
                 }
             });
+        }
+
+        // posts to the UI thread, quietly dropped when the window is gone
+        void Ui(Action action)
+        {
+            if (IsHandleCreated && !IsDisposed)
+                BeginInvoke(action);
         }
 
         void AttachResult(FsNode root, bool addMode, bool canceled)

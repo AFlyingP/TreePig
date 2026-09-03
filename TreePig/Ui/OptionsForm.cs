@@ -22,7 +22,7 @@ namespace TreePig.Ui
             MinimizeBox = false;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(430, 220);
+            ClientSize = new Size(430, 240);
             Font = new Font("Segoe UI", 9f);
 
             var scanGroup = new GroupBox
@@ -51,13 +51,13 @@ namespace TreePig.Ui
             {
                 Text = "View",
                 Location = new Point(12, 92),
-                Size = new Size(406, 74)
+                Size = new Size(406, 88)
             };
-            var unitLabel = new Label { Text = "Size units:", Location = new Point(12, 28), AutoSize = true };
+            var unitLabel = new Label { Text = "Size units:", Location = new Point(12, 29), AutoSize = true };
             _unit = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Location = new Point(90, 24),
+                Location = new Point(90, 25),
                 Width = 100
             };
             foreach (SizeUnit u in Enum.GetValues(typeof(SizeUnit)))
@@ -67,7 +67,7 @@ namespace TreePig.Ui
             _bars = new CheckBox
             {
                 Text = "Show size bars",
-                Location = new Point(210, 26),
+                Location = new Point(210, 28),
                 AutoSize = true,
                 Checked = _settings.ShowBars
             };
@@ -75,7 +75,7 @@ namespace TreePig.Ui
             _colorButton = new Button
             {
                 Text = "Bar color...",
-                Location = new Point(90, 40 - 8),
+                Location = new Point(90, 52),
                 Size = new Size(100, 26)
             };
             _colorButton.Click += (s, e) =>
@@ -91,8 +91,8 @@ namespace TreePig.Ui
             _barColor = Util.ParseColor(_settings.BarColor, Color.FromArgb(192, 80, 77));
             _colorButton.BackColor = _barColor;
 
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(246, 182), Size = new Size(80, 26) };
-            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(334, 182), Size = new Size(80, 26) };
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(246, 198), Size = new Size(80, 26) };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(334, 198), Size = new Size(80, 26) };
 
             Controls.AddRange(new Control[] { scanGroup, viewGroup, ok, cancel });
             AcceptButton = ok;

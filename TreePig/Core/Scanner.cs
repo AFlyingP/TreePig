@@ -66,7 +66,6 @@ namespace TreePig.Core
             }
             catch (OperationCanceledException)
             {
-                Root.HasError = true;
                 throw;
             }
             Report(_path, true);
@@ -144,50 +143,52 @@ namespace TreePig.Core
             foreach (var entry in di.EnumerateFileSystemInfos())
             {
                 _ct.ThrowIfCancellationRequested();
-
-                FileAttributes attr;
-                bool isDir;
-                try { attr = entry.Attributes; isDir = entry is DirectoryInfo; }
-                catch { continue; } // vanished between listing and stat
-
-                if (isDir)
+                // entries can vanish or deny access between listing and stat,
+                // they just get skipped
+                try
                 {
-                    bool reparse = (attr & FileAttributes.ReparsePoint) != 0;
-                    var child = new FsNode
+                    FileAttributes attr = entry.Attributes;
+                    bool isDir = entry is DirectoryInfo;
+
+                    if (isDir)
                     {
-                        Name = entry.Name,
-                        FullName = entry.FullName,
-                        IsDirectory = true,
-                        IsReparsePoint = reparse,
-                        Attributes = attr,
-                        LastWriteUtc = entry.LastWriteTimeUtc
-                    };
-                    node.AddDirChild(child);
-                    // junctions and symlinks are listed but not followed
-                    if (!reparse)
-                        (subs ??= new List<Task<FsNode>>()).Add(ScanDirAsync(child, (DirectoryInfo)entry));
-                }
-                else
-                {
-                    long len = 0;
-                    try { len = ((FileInfo)entry).Length; }
-                    catch { }
-                    var child = new FsNode
+                        bool reparse = (attr & FileAttributes.ReparsePoint) != 0;
+                        var child = new FsNode
+                        {
+                            Name = entry.Name,
+                            FullName = entry.FullName,
+                            IsDirectory = true,
+                            IsReparsePoint = reparse,
+                            Attributes = attr,
+                            LastWriteUtc = entry.LastWriteTimeUtc
+                        };
+                        node.AddDirChild(child);
+                        // junctions and symlinks are listed but not followed
+                        if (!reparse)
+                            (subs ??= new List<Task<FsNode>>()).Add(ScanDirAsync(child, (DirectoryInfo)entry));
+                    }
+                    else
                     {
-                        Name = entry.Name,
-                        FullName = entry.FullName,
-                        IsDirectory = false,
-                        Attributes = attr,
-                        Size = len,
-                        Allocated = Util.RoundUpToCluster(len, _cluster),
-                        LastWriteUtc = entry.LastWriteTimeUtc
-                    };
-                    if (_opt.CollectOwner) child.Owner = Util.GetOwner(entry.FullName);
-                    node.AddFileChild(child);
-                    Interlocked.Add(ref _bytes, len);
-                    Interlocked.Increment(ref _files);
-                    MaybeReport(entry.FullName);
+                        long len = ((FileInfo)entry).Length;
+                        var child = new FsNode
+                        {
+                            Name = entry.Name,
+                            FullName = entry.FullName,
+                            IsDirectory = false,
+                            Attributes = attr,
+                            Size = len,
+                            Allocated = Util.RoundUpToCluster(len, _cluster),
+                            LastWriteUtc = entry.LastWriteTimeUtc
+                        };
+                        if (_opt.CollectOwner) child.Owner = Util.GetOwner(entry.FullName);
+                        node.AddFileChild(child);
+                        Interlocked.Add(ref _bytes, len);
+                        Interlocked.Increment(ref _files);
+                        MaybeReport(entry.FullName);
+                    }
                 }
+                catch (OperationCanceledException) { throw; }
+                catch { continue; }
             }
             return subs;
         }
