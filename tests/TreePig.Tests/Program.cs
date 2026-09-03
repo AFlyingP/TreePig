@@ -98,6 +98,24 @@ class Harness
 
         form.Close();
 
+        // pick a file two levels down: the breadcrumb must show the whole
+        // path and the folders on the way get the tint
+        var docs = root.Children.First(c => c.Name == "Docs");
+        var notes = docs.Children.First(c => c.Name == "notes");
+        var todo = notes.Children.First(c => c.Name == "todo.bin");
+        tree.SelectNode(todo);   // jumps down through branches that are collapsed
+        Application.DoEvents();        var bc = tree.Breadcrumb;
+        Console.WriteLine($"breadcrumb segments: {bc.Path.Count} (expected 4), second is Docs: {bc.Path.Count > 1 && bc.Path[1].Name == "Docs"}");
+        if (bc.Path.Count != 4 || bc.Path[1].Name != "Docs") { Console.WriteLine("BREADCRUMB WRONG"); return 1; }
+
+        var chain = typeof(TreeListView).GetField("_chain", BindingFlags.NonPublic | BindingFlags.Instance)
+                        .GetValue(tree) as HashSet<FsNode>;
+        Console.WriteLine($"chain tinted: root={chain.Contains(root)} docs={chain.Contains(docs)} notes={chain.Contains(notes)} (expected true,true,true)");
+        if (!chain.Contains(root) || !chain.Contains(docs) || !chain.Contains(notes)
+            || chain.Contains(todo)
+            || chain.Contains(root.Children.First(c => c.Name == "Music")))
+        { Console.WriteLine("CHAIN WRONG"); return 1; }
+
         // cancel a big scan mid flight, it must return promptly instead of
         // leaving workers hanging around
         var cts = new CancellationTokenSource(1500);
