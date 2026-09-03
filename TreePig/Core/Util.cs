@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -51,6 +52,26 @@ namespace TreePig.Core
             if (t.TotalMinutes >= 1)
                 return string.Format("{0:0}m {1:0.0}s", t.TotalMinutes, t.Seconds);
             return string.Format("{0:0.0}s", t.TotalSeconds);
+        }
+
+        public static Color ParseColor(string text, Color fallback)
+        {
+            try
+            {
+                var parts = text.Split(',');
+                if (parts.Length == 3 &&
+                    int.TryParse(parts[0], out int r) &&
+                    int.TryParse(parts[1], out int g) &&
+                    int.TryParse(parts[2], out int b))
+                    return Color.FromArgb(r, g, b);
+            }
+            catch { }
+            return fallback;
+        }
+
+        public static SizeUnit ParseUnit(string text)
+        {
+            return Enum.TryParse<SizeUnit>(text, out var unit) ? unit : SizeUnit.Auto;
         }
 
         public static uint GetClusterSize(string path)

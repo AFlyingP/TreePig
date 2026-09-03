@@ -25,6 +25,7 @@ namespace TreePig.Ui
         ToolStripMenuItem _miRescan, _miCancel, _miExport, _miLargest, _miFileTypes;
         ToolStripButton _btnRescan, _btnStop;
 
+        readonly AppSettings _settings = AppSettings.Load();
         Scanner _scanner;
         CancellationTokenSource _cts;
         ScanProgressDialog _scanDlg;
@@ -42,7 +43,16 @@ namespace TreePig.Ui
             Size = new Size(1000, 660);
             AllowDrop = true;
 
-            _tree = new TreeListView { Dock = DockStyle.Fill };
+            _tree = new TreeListView
+            {
+                Dock = DockStyle.Fill,
+                Unit = Util.ParseUnit(_settings.Unit),
+                ShowBars = _settings.ShowBars,
+                BarColor = Util.ParseColor(_settings.BarColor, Color.FromArgb(110, 192, 80, 77)),
+                SortColumn = _settings.SortColumn,
+                SortAscending = _settings.SortAscending
+            };
+            ApplyColumnSettings(_tree);
             _tree.ColumnClicked += TreeColumnClicked;
             _tree.SelectionChanged += TreeSelectionChanged;
             _tree.NodeActivated += (s, e) => OpenSelection();
@@ -82,8 +92,37 @@ namespace TreePig.Ui
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            if (_pendingScan != null) StartScan(_pendingScan, false);
+            RestoreWindow();
+            if (_pendingScan != null)
+                StartScan(_pendingScan, false);
+            else if (_settings.ScanLastOnStart && Directory.Exists(_settings.LastPath))
+                StartScan(_settings.LastPath, false);
             PositionHint();
+        }
+
+        void RestoreWindow()
+        {
+            var r = _settings.WindowRect;
+            if (r != null && r.Length == 4 && r[2] >= 400 && r[3] >= 300)
+            {
+                StartPosition = FormStartPosition.Manual;
+                Bounds = new Rectangle(r[0], r[1], r[2], r[3]);
+            }
+            if (_settings.WindowMaximized) WindowState = FormWindowState.Maximized;
+        }
+
+        void ApplyColumnSettings(TreeListView tree)
+        {
+            var w = _settings.ColumnWidths;
+            var v = _settings.ColumnVisible;
+            for (int i = 0; i < tree.Columns.Count; i++)
+            {
+                if (w != null && w.Length == tree.Columns.Count)
+                    tree.Columns[i].Width = Math.Max(tree.Columns[i].MinWidth, w[i]);
+                if (v != null && v.Length == tree.Columns.Count)
+                    tree.Columns[i].Visible = v[i];
+            }
+            tree.ColumnVisibilityChanged();
         }
 
         protected override void OnResize(EventArgs e)
@@ -285,8 +324,9 @@ namespace TreePig.Ui
             catch { return; }
 
             _lastPath = path;
+            _settings.LastPath = path;
             _cts = new CancellationTokenSource();
-            _scanner = new Scanner(path, new ScanOptions());
+            _scanner = new Scanner(path, new ScanOptions { CollectOwner = _settings.CollectOwner });
             _scanning = true;
             SetBusyState(true);
             ShowScanDialog();
@@ -782,7 +822,41 @@ namespace TreePig.Ui
 
         void ShowOptions()
         {
-            MessageBox.Show(this, "not implemented yet", "TreePig");
+            using var dlg = new OptionsForm(_settings);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            _settings.Save();
+
+            _tree.Unit = Util.ParseUnit(_settings.Unit);
+            _tree.ShowBars = _settings.ShowBars;
+            _tree.BarColor = Util.ParseColor(_settings.BarColor, _tree.BarColor);
+            _tree.RefreshAll();
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            base.OnFormClosed(e);
+            if (WindowState == FormWindowState.Normal)
+            {
+                var b = RestoreBounds;
+                _settings.WindowRect = new[] { b.X, b.Y, b.Width, b.Height };
+            }
+            _settings.WindowMaximized = WindowState == FormWindowState.Maximized;
+
+            var widths = new int[_tree.Columns.Count];
+            var visible = new bool[_tree.Columns.Count];
+            for (int i = 0; i < _tree.Columns.Count; i++)
+            {
+                widths[i] = _tree.Columns[i].Width;
+                visible[i] = _tree.Columns[i].Visible;
+            }
+            _settings.ColumnWidths = widths;
+            _settings.ColumnVisible = visible;
+            _settings.SortColumn = _tree.SortColumn;
+            _settings.SortAscending = _tree.SortAscending;
+            _settings.Unit = _tree.Unit.ToString();
+            _settings.ShowBars = _tree.ShowBars;
+            if (!string.IsNullOrEmpty(_lastPath)) _settings.LastPath = _lastPath;
+            _settings.Save();
         }
     }
 }
