@@ -78,13 +78,21 @@ namespace TreePig.Ui
         }
 
         // paths get long, trim them from the left so the interesting end
-        // stays visible
+        // stays visible. estimate the cut first, then correct at most a few
+        // times instead of shaving one loop per update
         string FitPath(string path, int availWidth)
         {
             if (string.IsNullOrEmpty(path)) return "";
             string s = path;
-            while (s.Length > 12 && TextRenderer.MeasureText(s, Font).Width > availWidth)
-                s = "..." + s.Substring(8);
+            int width = TextRenderer.MeasureText(s, Font).Width;
+            while (s.Length > 12 && width > availWidth)
+            {
+                int keep = Math.Max(8, s.Length * availWidth / Math.Max(1, width) - 12);
+                string candidate = "..." + s.Substring(s.Length - keep);
+                width = TextRenderer.MeasureText(candidate, Font).Width;
+                if (width <= availWidth) return candidate;
+                s = candidate;
+            }
             return s;
         }
     }

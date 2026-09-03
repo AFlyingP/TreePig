@@ -31,6 +31,7 @@ namespace TreePig.Ui
         ScanProgressDialog _scanDlg;
         LargestFilesForm _largestForm;
         FileTypesForm _typesForm;
+        long _totalErrors;
         bool _scanning;
         string _pendingScan;
         string _lastPath;
@@ -422,7 +423,8 @@ namespace TreePig.Ui
             _emptyHint.Visible = false;
             Text = root.IsVirtualRoot ? "TreePig" : "TreePig - " + root.FullName;
             UpdateSummary(canceled ? "  (cancelled)" : "");
-            SetErrorCount(CountErrors(root));
+            _totalErrors = _scanner.ErrorCount;
+            SetErrorCount(_totalErrors);
             SetBusyState(false);
         }
 
@@ -438,10 +440,12 @@ namespace TreePig.Ui
                 suffix);
         }
 
-        int CountErrors(FsNode root)
+        // errors inside one branch, the caller pays only for the part involved
+        long CountErrorsBelow(FsNode node)
         {
-            int n = 0;
-            foreach (var n2 in root.EnumerateAll()) if (n2.HasError) n++;
+            long n = 0;
+            foreach (var x in node.EnumerateAll())
+                if (x.HasError) n++;
             return n;
         }
 
@@ -480,7 +484,7 @@ namespace TreePig.Ui
             foreach (var p in paths)
             {
                 _cts = new CancellationTokenSource();
-                var scanner = new Scanner(p, new ScanOptions());
+                var scanner = new Scanner(p, new ScanOptions { CollectOwner = _settings.CollectOwner });
                 var progress = new Progress<ScanProgress>(OnScanProgress);
                 try
                 {
@@ -488,6 +492,8 @@ namespace TreePig.Ui
                     virt.AddDirChild(root);
                     virt.RollUp(root);
                     _tree.SetRoot(virt);
+                    _totalErrors += scanner.ErrorCount;
+                    SetErrorCount(_totalErrors);
                 }
                 catch (OperationCanceledException) { break; }
                 catch { }
@@ -545,9 +551,9 @@ namespace TreePig.Ui
             UseWaitCursor = false;
         }
 
-        void SetErrorCount(int n)
+        void SetErrorCount(long n)
         {
-            _statusErrors.Text = n > 0 ? string.Format("{0} errors", n) : "";
+            _statusErrors.Text = n > 0 ? string.Format("{0} errors", n.ToString("N0")) : "";
             _statusErrors.ForeColor = n > 0 ? Color.Firebrick : SystemColors.ControlText;
         }
 
@@ -664,6 +670,8 @@ namespace TreePig.Ui
             }
 
             fs.RemoveFromTree();
+            _totalErrors -= CountErrorsBelow(fs);
+            SetErrorCount(_totalErrors);
             _tree.RemoveNode(fs);
             UpdateSummary();
         }
@@ -675,8 +683,9 @@ namespace TreePig.Ui
             SetBusyState(true);
             ShowScanDialog();
 
+            long errorsBefore = CountErrorsBelow(node);
             _cts = new CancellationTokenSource();
-            var scanner = new Scanner(node.FullName, new ScanOptions());
+            var scanner = new Scanner(node.FullName, new ScanOptions { CollectOwner = _settings.CollectOwner });
             var progress = new Progress<ScanProgress>(OnScanProgress);
             try
             {
@@ -685,15 +694,17 @@ namespace TreePig.Ui
                 if (parent == null)
                 {
                     _tree.SetRoot(fresh);
+                    _totalErrors = scanner.ErrorCount;
                 }
                 else
                 {
                     parent.ReplaceChild(node, fresh);
+                    _totalErrors += scanner.ErrorCount - errorsBefore;
                     _tree.Reload();
                 }
                 Text = _tree.RootFs.IsVirtualRoot ? "TreePig" : "TreePig - " + _tree.RootFs.FullName;
                 UpdateSummary();
-                SetErrorCount(CountErrors(_tree.RootFs));
+                SetErrorCount(_totalErrors);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
