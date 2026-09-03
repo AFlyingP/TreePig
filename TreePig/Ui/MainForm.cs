@@ -26,6 +26,8 @@ namespace TreePig.Ui
         Scanner _scanner;
         CancellationTokenSource _cts;
         ScanProgressDialog _scanDlg;
+        LargestFilesForm _largestForm;
+        FileTypesForm _typesForm;
         bool _scanning;
         string _pendingScan;
         string _lastPath;
@@ -693,12 +695,29 @@ namespace TreePig.Ui
 
         void ShowLargestFiles()
         {
-            MessageBox.Show(this, "not implemented yet", "TreePig");
+            if (_tree.RootFs == null) return;
+            if (_largestForm != null && !_largestForm.IsDisposed)
+            {
+                _largestForm.Activate();
+                return;
+            }
+            _largestForm = new LargestFilesForm(_tree.RootFs);
+            _largestForm.FilesChanged += (s, e) => UpdateSummary();
+            _largestForm.FormClosed += (s, e) => _largestForm = null;
+            _largestForm.Show(this);
         }
 
         void ShowFileTypes()
         {
-            MessageBox.Show(this, "not implemented yet", "TreePig");
+            if (_tree.RootFs == null) return;
+            if (_typesForm != null && !_typesForm.IsDisposed)
+            {
+                _typesForm.Activate();
+                return;
+            }
+            _typesForm = new FileTypesForm(_tree.RootFs);
+            _typesForm.FormClosed += (s, e) => _typesForm = null;
+            _typesForm.Show(this);
         }
 
         void ShowOptions()
