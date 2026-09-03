@@ -10,7 +10,9 @@
     <AssemblyName>TreePig</AssemblyName>
     <RootNamespace>TreePig</RootNamespace>
     <ApplicationIcon>TreePig.ico</ApplicationIcon>
-    <Version>0.1.0</Version>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
     <Product>TreePig</Product>
     <Description>Disk space analyzer for Windows</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
