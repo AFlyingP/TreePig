@@ -25,6 +25,7 @@ namespace TreePig.Ui
 
         Scanner _scanner;
         CancellationTokenSource _cts;
+        ScanProgressDialog _scanDlg;
         bool _scanning;
         string _pendingScan;
         string _lastPath;
@@ -61,7 +62,11 @@ namespace TreePig.Ui
 
             DragEnter += OnDragEnter;
             DragDrop += OnDragDrop;
-            FormClosing += (s, e) => _cts?.Cancel();
+            FormClosing += (s, e) =>
+            {
+                _cts?.Cancel();
+                CloseScanDialog();
+            };
 
             if (args != null && args.Length > 0 && (Directory.Exists(args[0]) || File.Exists(args[0])))
                 _pendingScan = args[0];
@@ -277,6 +282,7 @@ namespace TreePig.Ui
             _scanner = new Scanner(path, new ScanOptions());
             _scanning = true;
             SetBusyState(true);
+            ShowScanDialog();
 
             var progress = new Progress<ScanProgress>(OnScanProgress);
             var token = _cts.Token;
@@ -301,7 +307,9 @@ namespace TreePig.Ui
                     {
                         _scanning = false;
                         SetBusyState(false);
-                        MessageBox.Show(this, msg, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        CloseScanDialog();
+                        if (IsHandleCreated && !IsDisposed)
+                            MessageBox.Show(this, msg, "TreePig", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }));
                 }
             });
@@ -311,6 +319,7 @@ namespace TreePig.Ui
         {
             _scanning = false;
             SetBusyState(false);
+            CloseScanDialog();
             if (root == null) return;
 
             if (addMode)
@@ -347,16 +356,20 @@ namespace TreePig.Ui
 
             _emptyHint.Visible = false;
             Text = root.IsVirtualRoot ? "TreePig" : "TreePig - " + root.FullName;
+            UpdateSummary(canceled ? "  (cancelled)" : "");
+            SetErrorCount(CountErrors(root));
+        }
 
-            string suffix = canceled ? "  (cancelled)" : "";
-            _statusInfo.Text = string.Format("Scanned {0}: {1}, {2} files, {3} folders in {4}{5}",
+        void UpdateSummary(string suffix = "")
+        {
+            var root = _tree.RootFs;
+            if (root == null) return;
+            _statusInfo.Text = string.Format("Scanned {0}: {1}, {2} files, {3} folders{4}",
                 root.IsVirtualRoot ? "multiple folders" : root.FullName,
                 Util.FormatBytes(root.Size),
                 root.Files.ToString("N0"),
                 root.Folders.ToString("N0"),
-                Util.FormatElapsed(TimeSpan.Zero),
                 suffix);
-            SetErrorCount(CountErrors(root));
         }
 
         int CountErrors(FsNode root)
@@ -432,6 +445,23 @@ namespace TreePig.Ui
                 p.Files.ToString("N0"),
                 p.Dirs.ToString("N0"),
                 Util.FormatElapsed(p.Elapsed));
+            _scanDlg?.UpdateProgress(p);
+        }
+
+        void ShowScanDialog()
+        {
+            if (_scanDlg != null) return;
+            _scanDlg = new ScanProgressDialog(CancelScan);
+            _scanDlg.Show(this);
+        }
+
+        void CloseScanDialog()
+        {
+            if (_scanDlg != null)
+            {
+                try { _scanDlg.Close(); } catch { }
+                _scanDlg = null;
+            }
         }
 
         void SetBusyState(bool busy)
