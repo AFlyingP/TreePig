@@ -63,7 +63,8 @@ namespace TreePig.Ui
         readonly HeaderStrip _header;
         readonly ColumnTree _tree;
         readonly System.Windows.Forms.Timer _layoutTimer;
-        Dictionary<FsNode, TreeNode> _map = new Dictionary<FsNode, TreeNode>();
+        readonly Dictionary<FsNode, TreeNode> _map = new Dictionary<FsNode, TreeNode>();
+        readonly HashSet<FsNode> _populated = new HashSet<FsNode>();
         List<KeyValuePair<int, int>> _colPos = new List<KeyValuePair<int, int>>();
         int _colTotal;
         int _spaceW;
@@ -159,10 +160,14 @@ namespace TreePig.Ui
 
         // --- data ---
 
+        // The tree only builds TreeNodes for rows that are actually shown.
+        // A scan of a big drive can easily have hundreds of thousands of
+        // folders, building a control node for each of them froze the UI for
+        // ages. Expansion pulls in the next level on demand instead.
+
         public void SetRoot(FsNode root)
         {
             RootFs = root;
-            SortModel();
             Reload();
             if (_tree.Nodes.Count > 0) _tree.Nodes[0].Expand();
         }
@@ -176,20 +181,50 @@ namespace TreePig.Ui
 
             _tree.Nodes.Clear();
             _map.Clear();
-            if (RootFs != null) BuildInto(_tree.Nodes, RootFs);
-            RestoreExpanded(_tree.Nodes, expanded);
+            _populated.Clear();
+            if (RootFs != null)
+            {
+                var rootTn = MakeNode(RootFs);
+                _tree.Nodes.Add(rootTn);
+                RestoreExpanded(RootFs, rootTn, expanded);
+            }
             _tree.EndUpdate();
 
             if (sel != null) RestoreSelection(sel);
         }
 
-        void BuildInto(TreeNodeCollection coll, FsNode fs)
+        TreeNode MakeNode(FsNode fs)
         {
             var tn = new TreeNode(fs.Name + PadFor(fs)) { Tag = fs };
             _map[fs] = tn;
-            coll.Add(tn);
             if (fs.HasChildren)
-                foreach (var c in fs.Children) BuildInto(tn.Nodes, c);
+                tn.Nodes.Add(DummyNode());
+            return tn;
+        }
+
+        // placeholder child, that is what makes the control offer expansion;
+        // it gets swapped for the real rows when the node is opened
+        static TreeNode DummyNode() => new TreeNode("...") { Tag = null };
+
+        void PopulateNode(TreeNode tn, FsNode fs)
+        {
+            if (fs == null || !fs.HasChildren || _populated.Contains(fs)) return;
+            _populated.Add(fs);
+            tn.Nodes.Clear();
+            fs.Children.Sort(CompareNodes);
+            foreach (var c in fs.Children)
+                tn.Nodes.Add(MakeNode(c));
+        }
+
+        void RestoreExpanded(FsNode fs, TreeNode tn, HashSet<string> set)
+        {
+            if (!set.Contains(fs.FullName) || !fs.HasChildren) return;
+            if (tn.Nodes.Count == 1 && tn.Nodes[0].Tag == null) tn.Nodes.RemoveAt(0);
+            PopulateNode(tn, fs);
+            tn.Expand();
+            foreach (var c in fs.Children)
+                if (_map.TryGetValue(c, out TreeNode ctn))
+                    RestoreExpanded(c, ctn, set);
         }
 
         void CollectExpanded(TreeNodeCollection nodes, HashSet<string> set)
@@ -198,19 +233,6 @@ namespace TreePig.Ui
             {
                 if (n.IsExpanded) set.Add(((FsNode)n.Tag).FullName);
                 if (n.Nodes.Count > 0) CollectExpanded(n.Nodes, set);
-            }
-        }
-
-        void RestoreExpanded(TreeNodeCollection nodes, HashSet<string> set)
-        {
-            foreach (TreeNode n in nodes)
-            {
-                var fs = (FsNode)n.Tag;
-                if (set.Contains(fs.FullName) && fs.HasChildren)
-                {
-                    n.Expand();
-                    RestoreExpanded(n.Nodes, set);
-                }
             }
         }
 
@@ -227,17 +249,14 @@ namespace TreePig.Ui
             }
         }
 
+        // sorts what is on screen; folders get sorted when their rows are
+        // first built, so a sort click stays cheap no matter how big the
+        // scan is
         public void SortModel()
         {
-            if (RootFs == null) return;
-            SortRecursive(RootFs);
-        }
-
-        void SortRecursive(FsNode n)
-        {
-            if (!n.HasChildren) return;
-            foreach (var c in n.Children) SortRecursive(c);
-            n.Children.Sort(CompareNodes);
+            foreach (var fs in _map.Keys)
+                if (fs.HasChildren)
+                    fs.Children.Sort(CompareNodes);
         }
 
         int CompareNodes(FsNode a, FsNode b)
@@ -287,6 +306,12 @@ namespace TreePig.Ui
                 _map.Remove(fs);
                 tn.Remove();
             }
+            // drop the subtree's rows from the bookkeeping too
+            foreach (var n in fs.EnumerateAll())
+            {
+                _map.Remove(n);
+                _populated.Remove(n);
+            }
             RefreshAncestors(fs);
         }
 
@@ -320,7 +345,21 @@ namespace TreePig.Ui
 
         public void ExpandBelow(FsNode fs)
         {
-            if (fs != null && _map.TryGetValue(fs, out TreeNode tn)) tn.ExpandAll();
+            if (fs == null || !_map.TryGetValue(fs, out TreeNode tn)) return;
+            _tree.BeginUpdate();
+            ExpandRecursive(tn, fs);
+            _tree.EndUpdate();
+        }
+
+        void ExpandRecursive(TreeNode tn, FsNode fs)
+        {
+            if (!fs.HasChildren) return;
+            if (tn.Nodes.Count == 1 && tn.Nodes[0].Tag == null) tn.Nodes.RemoveAt(0);
+            PopulateNode(tn, fs);
+            tn.Expand();
+            foreach (var c in fs.Children)
+                if (_map.TryGetValue(c, out TreeNode ctn))
+                    ExpandRecursive(ctn, c);
         }
 
         public void CollapseBelow(FsNode fs)
@@ -328,8 +367,15 @@ namespace TreePig.Ui
             if (fs != null && _map.TryGetValue(fs, out TreeNode tn)) tn.Collapse(false);
         }
 
-        public void ExpandAll() { _tree.BeginUpdate(); _tree.ExpandAll(); _tree.EndUpdate(); }
-        public void CollapseAll() { _tree.BeginUpdate(); _tree.CollapseAll(); _tree.EndUpdate(); }
+        public void ExpandAll()
+        {
+            if (RootFs != null) ExpandBelow(RootFs);
+        }
+
+        public void CollapseAll()
+        {
+            if (RootFs != null) CollapseBelow(RootFs);
+        }
 
         // --- cell text ---
 
@@ -559,6 +605,17 @@ namespace TreePig.Ui
                     if (r.Contains(e.X, e.Y)) n.Toggle();
                 }
                 catch { }
+            }
+
+            protected override void OnBeforeExpand(TreeViewCancelEventArgs e)
+            {
+                base.OnBeforeExpand(e);
+                // first time this is opened: swap the placeholder for real rows
+                if (e.Node?.Tag is FsNode fs && e.Node.Nodes.Count == 1 && e.Node.Nodes[0].Tag == null)
+                {
+                    e.Node.Nodes.RemoveAt(0);
+                    _owner.PopulateNode(e.Node, fs);
+                }
             }
 
             protected override void OnAfterSelect(TreeViewEventArgs e)
