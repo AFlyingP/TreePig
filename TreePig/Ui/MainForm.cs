@@ -133,6 +133,7 @@ namespace TreePig.Ui
 
         void PositionHint()
         {
+            if (_tree == null || _emptyHint == null) return;
             _emptyHint.Location = new Point(
                 (_tree.ClientSize.Width - _emptyHint.PreferredWidth) / 2,
                 (_tree.ClientSize.Height - _emptyHint.PreferredHeight) / 2);
@@ -166,8 +167,8 @@ namespace TreePig.Ui
             file.DropDownOpening += (s, e) => RefreshDriveItems(file.DropDownItems);
 
             var view = new ToolStripMenuItem("&View");
-            var miExpand = new ToolStripMenuItem("Expand &All", null, (s, e) => _tree.ExpandAll()) { ShortcutKeys = Keys.Multiply };
-            var miCollapse = new ToolStripMenuItem("C&ollapse All", null, (s, e) => _tree.CollapseAll()) { ShortcutKeys = Keys.Divide };
+            var miExpand = new ToolStripMenuItem("Expand &All", null, (s, e) => _tree.ExpandAll());
+            var miCollapse = new ToolStripMenuItem("C&ollapse All", null, (s, e) => _tree.CollapseAll());
             view.DropDownItems.Add(miExpand);
             view.DropDownItems.Add(miCollapse);
             view.DropDownItems.Add(new ToolStripSeparator());
@@ -378,9 +379,12 @@ namespace TreePig.Ui
         void AttachResult(FsNode root, bool addMode, bool canceled)
         {
             _scanning = false;
-            SetBusyState(false);
             CloseScanDialog();
-            if (root == null) return;
+            if (root == null)
+            {
+                SetBusyState(false);
+                return;
+            }
 
             if (addMode)
             {
@@ -418,6 +422,7 @@ namespace TreePig.Ui
             Text = root.IsVirtualRoot ? "TreePig" : "TreePig - " + root.FullName;
             UpdateSummary(canceled ? "  (cancelled)" : "");
             SetErrorCount(CountErrors(root));
+            SetBusyState(false);
         }
 
         void UpdateSummary(string suffix = "")
@@ -724,6 +729,8 @@ namespace TreePig.Ui
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (keyData == Keys.Multiply) { _tree.ExpandAll(); return true; }
+            if (keyData == Keys.Divide) { _tree.CollapseAll(); return true; }
             if (keyData == (Keys.Control | Keys.C))
             {
                 var fs = _tree.SelectedFsNode;
